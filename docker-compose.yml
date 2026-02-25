@@ -1,0 +1,125 @@
+# =========================================================
+# AIRFLOW LOCAL EXECUTOR – FIXED
+# =========================================================
+
+x-airflow-common: &airflow-common
+  image: my-airflow-custom:latest
+  restart: unless-stopped
+
+  environment: &airflow-common-env
+    # -------------------------
+    # Core
+    # -------------------------
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "180"
+
+    AIRFLOW__CORE__PARALLELISM: 4
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: 2
+
+    # -------------------------
+    # Scheduler stability
+    # -------------------------
+    AIRFLOW__SCHEDULER__JOB_HEARTBEAT_SEC: 10
+    AIRFLOW__SCHEDULER__SCHEDULER_HEARTBEAT_SEC: 10
+    AIRFLOW__SCHEDULER__ZOMBIE_TASK_THRESHOLD: 600
+
+    # -------------------------
+    # Database (IMPORTANT)
+    # -------------------------
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: 5
+    AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW: 2
+    AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS: "false"
+
+    # -------------------------
+    # Paths
+    # -------------------------
+    PYTHONPATH: /opt/airflow/dags
+    SQLITE_DB_PATH: /opt/airflow/input_data/market_data.db
+
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./dags/output_folder:/opt/airflow/output_folder
+    - ./dags/input_data:/opt/airflow/input_data
+
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+
+# =========================================================
+# SERVICES
+# =========================================================
+services:
+
+  # -------------------------
+  # Postgres
+  # -------------------------
+  postgres:
+    image: postgres:16
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # -------------------------
+  # Airflow Init (RUN ONCE)
+  # -------------------------
+  airflow-init:
+    <<: *airflow-common
+    restart: "no"
+    entrypoint: /bin/bash
+    command: >
+      -c "
+      airflow db migrate &&
+      airflow users create
+        --username admin
+        --firstname Hanush
+        --lastname Admin
+        --role Admin
+        --email admin@example.com
+        --password admin
+      "
+
+  # -------------------------
+  # Webserver
+  # -------------------------
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+      AIRFLOW__WEBSERVER__SECRET_KEY: mysecretkey123
+
+  # -------------------------
+  # Scheduler
+  # -------------------------
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+      AIRFLOW__WEBSERVER__SECRET_KEY: mysecretkey123
+
+
+# =========================================================
+# VOLUMES
+# =========================================================
+volumes:
+  postgres-db-volume:
